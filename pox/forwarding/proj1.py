@@ -18,18 +18,13 @@ _flood_delay = 0
 class L2LearningSwitch (object):
 
   def __init__ (self, connection):
-    # Switch we'll be adding L2 learning switch capabilities to
     self.connection = connection
 
     # Our table that maps the MAC addresses to the port
     self.macToPort = {}
 
-    # We want to hear PacketIn messages, so we listen
-    # to the connection
+    # Add listner for packetIn messages
     connection.addListeners(self)
-
-    # We just use this to know when to log a helpful message
-    self.hold_down_expired = _flood_delay == 0
 
   def _handle_PacketIn (self, event):
     """
@@ -43,12 +38,6 @@ class L2LearningSwitch (object):
       msg = of.ofp_packet_out()
       if time.time() - self.connection.connect_time >= _flood_delay:
         # Only flood if we've been connected for a little while...
-
-        if self.hold_down_expired is False:
-          # Oh yes it is!
-          self.hold_down_expired = True
-          log.info("%s: Flood hold-down expired -- flooding",
-              dpid_to_str(event.dpid))
 
         if message is not None: log.debug(message)
         # OFPP_FLOOD is optional; on some switches you may need to change
