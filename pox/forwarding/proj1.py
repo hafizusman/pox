@@ -1,8 +1,9 @@
 """
-Author Junaid Khalid
+Author Muhammad Usman
 
 This is an L2 learning switch written directly against the OpenFlow library.
-It is derived from POX l2_learning.py only for IPv4.
+It is derived from 
+http://courses.cs.washington.edu/courses/csep561/13au/projects/L2LearningSwitch.txt.
 """
 
 from pox.core import core
@@ -15,13 +16,19 @@ log = core.getLogger()
 
 HARD_TIMEOUT = 30
 IDLE_TIMEOUT = 30
-class LearningSwitch (EventMixin):
+class L2LearningSwitch (EventMixin):
 
-  def __init__ (self,connection):
+  def __init__ (self, connection):
     # Switch we'll be adding L2 learning switch capabilities to
-    self.connection= connection
-    self.listenTo(connection)
-    
+    self.connection = connection
+
+    # Our table
+    self.macToPort = {}
+
+    # We want to hear PacketIn messages, so we listen
+    # to the connection
+    connection.addListeners(self)
+
 
   def _handle_PacketIn (self, event):
 
@@ -48,17 +55,24 @@ class LearningSwitch (EventMixin):
     msg.in_port = event.port
     self.connection.send(msg)
 
-class learning_switch (EventMixin):
-
+class l2_learning_switch (EventMixin):
   def __init__(self):
     self.listenTo(core.openflow)
 
+#
+# Event raised when the connection to an OpenFlow switch has been established
+#
   def _handle_ConnectionUp (self, event):
     log.debug("Connection %s" % (event.connection,))
-    LearningSwitch(event.connection)
+    L2LearningSwitch(event.connection)
 
-
+#
+# The launch function is called by POX to tell the component to initialize itself
+# We don't use any command line parameters for now
+#
 def launch ():
-  #Starts an L2 learning switch.
-  core.registerNew(learning_switch)
+  log.debug("*** L2 Learning Switch Started ***")
+
+  # Register the L2 learning switch
+  core.registerNew(l2_learning_switch)
 
