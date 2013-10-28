@@ -17,10 +17,9 @@ _flood_delay = 0
 
 class L2LearningSwitch (object):
 
-  def __init__ (self, connection, transparent):
+  def __init__ (self, connection):
     # Switch we'll be adding L2 learning switch capabilities to
     self.connection = connection
-    self.transparent = transparent
 
     # Our table that maps the MAC addresses to the port
     self.macToPort = {}
@@ -83,10 +82,9 @@ class L2LearningSwitch (object):
 
     self.macToPort[packet.src] = event.port # 1
 
-    if not self.transparent: # 2
-      if packet.type == packet.LLDP_TYPE or packet.dst.isBridgeFiltered():
-        drop() # 2a
-        return
+    if packet.type == packet.LLDP_TYPE or packet.dst.isBridgeFiltered():
+      drop() # 2a
+      return
 
     if packet.dst.is_multicast:
       flood() # 3a
@@ -117,20 +115,19 @@ class l2_learning_switch (object):
   """
   Waits for OpenFlow switches to connect and makes them learning switches.
   """
-  def __init__ (self, transparent):
+  def __init__ (self):
     core.openflow.addListeners(self)
-    self.transparent = transparent
 
   def _handle_ConnectionUp (self, event):
     log.debug("Connection %s" % (event.connection,))
-    L2LearningSwitch(event.connection, self.transparent)
+    L2LearningSwitch(event.connection)
 
 """
 launch function is one that POX calls to tell the component to initialize itself
 We don't use any command line parameters for now
 """
-def launch (transparent=False):
+def launch ():
   """
   Register our L2 learning switch
   """
-  core.registerNew(l2_learning_switch, str_to_bool(transparent))
+  core.registerNew(l2_learning_switch)
