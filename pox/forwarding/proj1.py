@@ -82,24 +82,25 @@ class L2LearningSwitch (object):
 
     self.macToPort[packet.src] = event.port # 1
 
+    # Drop LLDP packets 
+    # Drop IPv6 packets
     if packet.type == packet.LLDP_TYPE or packet.dst.isBridgeFiltered():
-      drop() # 2a
+      drop()
       return
 
     if packet.dst.is_multicast:
-      flood() # 3a
+      flood()
     else:
-      if packet.dst not in self.macToPort: # 4
-        flood("Port for %s unknown -- flooding" % (packet.dst,)) # 4a
+      if packet.dst not in self.macToPort:
+        flood("Port for %s unknown -- flooding" % (packet.dst,))
       else:
         port = self.macToPort[packet.dst]
-        if port == event.port: # 5
-          # 5a
+        if port == event.port:
           log.warning("Same port for packet from %s -> %s on %s.%s.  Drop."
               % (packet.src, packet.dst, dpid_to_str(event.dpid), port))
           drop(10)
           return
-        # 6
+
         log.debug("installing flow for %s.%i -> %s.%i" %
                   (packet.src, event.port, packet.dst, port))
         msg = of.ofp_flow_mod()
@@ -107,7 +108,7 @@ class L2LearningSwitch (object):
         msg.idle_timeout = 10
         msg.hard_timeout = 30
         msg.actions.append(of.ofp_action_output(port = port))
-        msg.data = event.ofp # 6a
+        msg.data = event.ofp
         self.connection.send(msg)
 
 
