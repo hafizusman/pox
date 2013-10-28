@@ -27,21 +27,16 @@ class L2LearningSwitch (object):
     connection.addListeners(self)
 
   def _handle_PacketIn (self, event):
-    """
-    Handle packet in messages from the switch to implement above algorithm.
-    """
-
+    # parsing the input packet
     packet = event.parsed
 
     def flood (message = None):
-      """ Floods the packet """
+      """ Floods the packet (doesn't send back to the in port though) """
       msg = of.ofp_packet_out()
-      if time.time() - self.connection.connect_time >= _flood_delay:
-        # Only flood if we've been connected for a little while...
 
+      # Have we waited long enough to flood?
+      if time.time() - self.connection.connect_time >= _flood_delay:
         if message is not None: log.debug(message)
-        # OFPP_FLOOD is optional; on some switches you may need to change
-        # this to OFPP_ALL.
         msg.actions.append(of.ofp_action_output(port = of.OFPP_FLOOD))
       else:
         pass
@@ -51,8 +46,8 @@ class L2LearningSwitch (object):
 
     def drop (duration = None):
       """
-      Drops this packet and optionally installs a flow to continue
-      dropping similar ones for a while
+      This function will discard the packet and install a flow modification
+      rule on the controller 
       """
       if duration is not None:
         if not isinstance(duration, tuple):
@@ -69,7 +64,7 @@ class L2LearningSwitch (object):
         msg.in_port = event.port
         self.connection.send(msg)
 
-    self.macToPort[packet.src] = event.port # 1
+    self.macToPort[packet.src] = event.port
 
     # Drop LLDP packets 
     # Drop IPv6 packets
@@ -90,12 +85,12 @@ class L2LearningSwitch (object):
           drop(10)
           return
 
-        log.debug("installing flow for %s.%i -> %s.%i" %
-                  (packet.src, event.port, packet.dst, port))
+        log.debug("flow_mod: for %s.%i -> %s.%i" % (packet.src, event.port, packet.dst, port))
         msg = of.ofp_flow_mod()
         msg.match = of.ofp_match.from_packet(packet, event.port)
         msg.idle_timeout = 10
-        msg.hard_timeout = 30
+        #doesn't seem like we need a hard timeout fow now
+        #msg.hard_timeout = 30
         msg.actions.append(of.ofp_action_output(port = port))
         msg.data = event.ofp
         self.connection.send(msg)
