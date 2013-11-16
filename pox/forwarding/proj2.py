@@ -1,14 +1,8 @@
 """
 Author Muhammad Usman
 
-Load-balancer
-"""
-
-"""
-Author Junaid Khalid
-
-This is an L2 learning switch written directly against the OpenFlow library.
-It is derived from POX l2_learning.py only for IPv4.
+This is an L3 load balancer written directly against the OpenFlow library.
+Derived from http://courses.cs.washington.edu/courses/csep561/13au/projects/LearningSwitch.txt
 """
 
 from pox.core import core
@@ -21,10 +15,10 @@ log = core.getLogger()
 
 HARD_TIMEOUT = 30
 IDLE_TIMEOUT = 30
-class LearningSwitch (EventMixin):
+class LoadBalancer (EventMixin):
 
   def __init__ (self,connection):
-    # Switch we'll be adding L2 learning switch capabilities to
+    # Switch we'll be adding L3 load-balancing capabilities to
     self.connection= connection
     self.listenTo(connection)
     
@@ -54,18 +48,18 @@ class LearningSwitch (EventMixin):
     msg.in_port = event.port
     self.connection.send(msg)
 
-class learning_switch (EventMixin):
+class load_balancer (EventMixin):
 
   def __init__(self):
     self.listenTo(core.openflow)
 
   def _handle_ConnectionUp (self, event):
     log.debug("Connection %s" % (event.connection,))
-    LearningSwitch(event.connection)
+    LoadBalancer(event.connection)
 
 
 def launch ():
-  #Starts an L2 learning switch.
-  core.registerNew(learning_switch)
+  #Starts an l3 load balancer switch.
+  core.registerNew(load_balancer)
 
 
