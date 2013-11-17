@@ -15,11 +15,16 @@ log = core.getLogger()
 
 HARD_TIMEOUT = 30
 IDLE_TIMEOUT = 30
+
+CONFIG_MAX_NODES = (4)
+CONFIG_SERVER_NODES = (CONFIG_MAX_NODES / 2)
+CONFIG_CLIENT_NODES = (CONFIG_MAX_NODES - CONFIG_SERVER_NODES)
+
 class LoadBalancer (EventMixin):
 
   def __init__ (self,connection):
     # Switch we'll be adding L3 load-balancing capabilities to
-    self.connection= connection
+    self.connection = connection
     self.listenTo(connection)
     
 
@@ -28,9 +33,10 @@ class LoadBalancer (EventMixin):
     # parsing the input packet
     packet = event.parse()
     
+    log.debug("%.2f::_handle_PacketIn(): src=%s,dst=%s,type=%x" % (time.clock(), packet.src, packet.dst, packet.type ))
+
     # updating out mac to port mapping
-    
-    if packet.type == packet.LLDP_TYPE or packet.type == 0x86DD:
+    if packet.type == packet.LLDP_TYPE or packet.type == packet.IPV6_TYPE:
       # Drop LLDP packets 
       # Drop IPv6 packets
       # send of command without actions
@@ -40,6 +46,12 @@ class LoadBalancer (EventMixin):
       msg.in_port = event.port
       self.connection.send(msg)
       return
+    elif packet.type != packet.IP_TYPE:
+      log.debug("%.2f::!!ERROR: Cannot handle eth type = %x\n" % packet.type)
+      return
+
+    l3packet = packet.next
+    log.debug("%.2f::_handle_PacketIn(): srcip=%s,dstip=%s" % (time.clock(), l3packet.srcip, l3packet.dstip))
 
     log.debug("Port for %s unknown -- flooding" % (packet.dst,))
     msg = of.ofp_packet_out()
@@ -54,7 +66,7 @@ class load_balancer (EventMixin):
     self.listenTo(core.openflow)
 
   def _handle_ConnectionUp (self, event):
-    log.debug("Connection %s" % (event.connection,))
+    log.debug("\n\n######Connection %s\n" % (event.connection,))
     LoadBalancer(event.connection)
 
 
