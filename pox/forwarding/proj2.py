@@ -12,21 +12,17 @@ Usage example:
 
 from pox.core import core
 import pox
-log = core.getLogger("l3loadbalancer")
-
-
-from pox.lib.packet.ethernet import ethernet, ETHER_BROADCAST
-from pox.lib.packet.ipv4 import ipv4
-from pox.lib.packet.arp import arp
-from pox.lib.addresses import IPAddr, EthAddr
-from pox.lib.util import str_to_bool, dpid_to_str
+import time
 
 
 import pox.openflow.libopenflow_01 as of
+from pox.lib.addresses import IPAddr, EthAddr
+from pox.lib.packet.ethernet import ethernet, ETHER_BROADCAST
+from pox.lib.packet.arp import arp
+from pox.lib.packet.ipv4 import ipv4
+from pox.lib.util import str_to_bool, dpid_to_str
 
-
-import time
-import random
+log = core.getLogger("l3loadbalancer")
 
 
 FLOW_IDLE_TIMEOUT = 10
@@ -379,14 +375,9 @@ def launch (replicas):
       log.info("Switch load balancing ignored for %s", event.connection)
     else:
       log.info("Switch load balancing on %s", event.connection)
-
-
-      # Gross hack
+      # save connection state for use during HandleIn Packet
       core.l3loadbalancer.con = event.connection
       event.connection.addListeners(core.l3loadbalancer)
-
-
-
 
   core.openflow.addListenerByName("ConnectionUp", _handle_ConnectionUp)
 
