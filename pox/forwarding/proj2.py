@@ -25,13 +25,14 @@ from pox.lib.util import str_to_bool, dpid_to_str
 
 log = core.getLogger("l3loadbalancer")
 
+# Special (Virtual) L2 and L3 addresses for the Service
 SERVICE_MAC = "00:00:00:00:ff:ff"
 SERVICE_IP = "10.0.0.250"
 
 # How long do we wait for an probe reply (ARP) before we consider a replica dead?
 REPLICA_ARP_RETRIES = 3
 
-# How often do we send out probes?
+# How often do we send out (ARP) probes?
 REPLICA_RETRY_FREQ = 5
 
 
@@ -41,7 +42,8 @@ FLOW_MEMORY_TIMEOUT = 60 * 5
 
 """
   Holds data for the flow that we're load balancing. Flows are cached on
-  an MRU basis - if a flow hasn't been used for a while, it is forgotten
+  an MRU basis - if a flow hasn't been used for a while, it is forgotten.
+  Replica liveliness and discovery probes are handled via ARP requests
 """
 class FlowInfo (object):
   def __init__ (self, replica, first_packet, client_port):
@@ -100,23 +102,14 @@ class l3loadbalancer (object):
 
     self._do_probe() # Kick off the probing
 
-  def _do_expire (self):
-    """
-    Expire probes and "memorized" flows
-
-
-    Each of these should only have a limited lifetime.
-    """
-    t = time.time()
-
+  def _expiration_handler (self):
     # Expire probes
     for ip,expire_at in self.outstanding_probes.items():
-      if t > expire_at:
+      if time.time() > expire_at:
         self.outstanding_probes.pop(ip, None)
         if ip in self.servers_loaded:
-          self.log.warn("Server %s down", ip)
+          self.log.warn("Replica %s down", ip)
           del self.servers_loaded[ip]
-
 
     # Expire old flows
     c = len(self.traffic_flows)
@@ -130,7 +123,7 @@ class l3loadbalancer (object):
     """
     Sends arps to replica to see if it's still alive
     """
-    self._do_expire()
+    self._expiration_handler()
 
     replica = self.replicas.pop(0)
     self.replicas.append(replica)
