@@ -45,6 +45,7 @@ import random
 
 FLOW_IDLE_TIMEOUT = 10
 FLOW_MEMORY_TIMEOUT = 60 * 5
+SERVICE_MAC = "00:00:00:00:ff:ff"
 
 
 
@@ -120,8 +121,9 @@ class iplb (object):
     self.service_ip = IPAddr(service_ip)
     self.servers = [IPAddr(a) for a in servers]
     self.con = connection
-    self.mac = EthAddr("00:00:00:00:00:ff")
+    self.mac = EthAddr(SERVICE_MAC)
     self.live_servers = {} # IP -> MAC,port
+    self.live_server_index = 0
 
 
     try:
@@ -232,7 +234,14 @@ class iplb (object):
     """
     Pick a server for a (hopefully) new connection
     """
-    return random.choice(self.live_servers.keys())
+    keys = self.live_servers.keys()
+    n = len(keys)
+    picked_live_server = keys[self.live_server_index]
+    self.live_server_index += 1
+    if self.live_server_index >= n:
+      self.live_server_index = 0
+    return picked_live_server
+    #return random.choice(self.live_servers.keys())
 
 
   def _handle_PacketIn (self, event):
