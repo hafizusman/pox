@@ -120,7 +120,7 @@ class iplb (object):
     self.service_ip = IPAddr(service_ip)
     self.servers = [IPAddr(a) for a in servers]
     self.con = connection
-    self.mac = self.con.eth_addr
+    self.mac = EthAddr("00:00:00:00:00:ff")
     self.live_servers = {} # IP -> MAC,port
 
 
@@ -374,14 +374,6 @@ def launch (ip, servers):
   servers = servers.replace(","," ").split()
   servers = [IPAddr(x) for x in servers]
   ip = IPAddr(ip)
-
-
-  # Boot up ARP Responder
-  from proto.arp_responder import launch as arp_launch
-  arp_launch(eat_packets=False,**{str(ip):True})
-  import logging
-  logging.getLogger("proto.arp_responder").setLevel(logging.WARN)
-
 
   def _handle_ConnectionUp (event):
     global _dpid
