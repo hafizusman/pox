@@ -16,7 +16,6 @@ log = core.getLogger()
 # We don't want to flood immediately when a switch connects.
 _flood_delay = 0
 _NAT_IP = IPAddr("172.64.3.1")
-_NAT_MAC = EthAddr("00:00:00:00:00:00")
 
 class Bridge (object):
 
@@ -110,13 +109,15 @@ class Bridge (object):
 
 class NAT (object):
 
-  def __init__ (self, connection):
+  def __init__ (self, connection, mac, ip):
     self.connection = connection
+    self.external_mac = mac
+    self.external_ip = ip
     self.externel_network = '172.64.3.0/24'
     self.arp_table = {
-                      IPAddr("10.0.1.1"):EthAddr("00:00:00:00:00:01"),
-                      IPAddr("10.0.1.2"):EthAddr("00:00:00:00:00:02"),
-                      IPAddr("10.0.1.3"):EthAddr("00:00:00:00:00:03"),
+                      IPAddr("10.0.1.101"):EthAddr("00:00:00:00:00:01"),
+                      IPAddr("10.0.1.102"):EthAddr("00:00:00:00:00:02"),
+                      IPAddr("10.0.1.103"):EthAddr("00:00:00:00:00:03"),
                       IPAddr("172.64.3.21"):EthAddr("00:00:00:00:00:04"),
                       IPAddr("172.64.3.22"):EthAddr("00:00:00:00:00:05")
                       }
@@ -188,13 +189,24 @@ class NAT (object):
       log.debug("ERROR: received broadcast, can't handle...")
       return
     else:
+      if packet.next.dstip == self.external_ip:
+        log.debug("FROM external network." )
+        msg = of.ofp_packet_out()
+        msg.in_port = event.port
+        msg.actions.append(of.ofp_action_dl_addr.set_dst(self.arp_table[IPAddr("10.0.1.101")]))
+        msg.actions.append(of.ofp_action_dl_addr.set_src(self.external_mac))
+        msg.actions.append(of.ofp_action_nw_addr.set_dst(IPAddr("10.0.1.101")))
+        msg.actions.append(of.ofp_action_output(port = of.OFPP_FLOOD))
+        msg.data = event.ofp
+        self.connection.send(msg)
+        return
       if packet.next.dstip.in_network(self.externel_network):
-        log.debug("Got external network packet, setting IP to: %s" % _NAT_IP.toStr())
+        log.debug("TO external network. Changes: dstMac=%s,srcMac=%s,dstIP=%s" % (self.arp_table[packet.next.dstip], self.external_mac.toStr(), self.external_ip.toStr()))
         msg = of.ofp_packet_out()
         msg.in_port = event.port
         msg.actions.append(of.ofp_action_dl_addr.set_dst(self.arp_table[packet.next.dstip]))
-        msg.actions.append(of.ofp_action_dl_addr.set_src(_NAT_MAC))
-        msg.actions.append(of.ofp_action_nw_addr.set_src(_NAT_IP))
+        msg.actions.append(of.ofp_action_dl_addr.set_src(self.external_mac))
+        msg.actions.append(of.ofp_action_nw_addr.set_src(self.external_ip))
         msg.actions.append(of.ofp_action_output(port = of.OFPP_FLOOD))
         msg.data = event.ofp
         self.connection.send(msg)
@@ -242,7 +254,7 @@ class MySwitch (object):
     else:
         _NAT_MAC = EthAddr(dpid_to_str(event.connection.dpid))
         log.debug("Launching NAT on dpid: %d, mac=%s" % (event.connection.dpid, _NAT_MAC.toStr()))
-        NAT(event.connection)
+        NAT(event.connection, _NAT_MAC, _NAT_IP)
 
 """
 launch function is one that POX calls to tell the component to initialize itself
