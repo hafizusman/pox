@@ -1,12 +1,13 @@
 """
 Author Muhammad Usman
 
-An L2 learning switch written directly against the OpenFlow library.
-Derived from http://courses.cs.washington.edu/courses/csep561/13au/projects/LearningSwitch.txt
+An NAT + Bridge implementation written directly against the OpenFlow library.
 """
 
 from pox.core import core
 import pox.openflow.libopenflow_01 as of
+from pox.lib.addresses import IPAddr, EthAddr
+from pox.lib.packet.ethernet import ethernet, ETHER_BROADCAST
 from pox.lib.util import *
 import time
 
@@ -14,13 +15,15 @@ log = core.getLogger()
 
 # We don't want to flood immediately when a switch connects.
 _flood_delay = 0
+_NAT_IP = IPAddr("172.64.3.1")
+_NAT_MAC = EthAddr("00:00:00:00:00:00")
 
-class L2LearningSwitch (object):
+class Bridge (object):
 
   def __init__ (self, connection):
     self.connection = connection
 
-    log.debug("L2LearningSwitch connection: %s" % (connection))
+    log.debug("Bridge connection: %s" % (connection))
     # Our table that maps the MAC addresses to the port
     self.macToPort = {}
 
@@ -30,7 +33,7 @@ class L2LearningSwitch (object):
   def _handle_PacketIn (self, event):
     # parsing the input packet
     packet = event.parsed
-    log.debug("L2Learning packet received")
+    log.debug("BRIDGE packet received")
 
     def flood (message = None):
       """ 
@@ -109,6 +112,14 @@ class NAT (object):
 
   def __init__ (self, connection):
     self.connection = connection
+    self.externel_network = '172.64.3.0/24'
+    self.arp_table = {
+                      IPAddr("10.0.1.1"):EthAddr("00:00:00:00:00:01"),
+                      IPAddr("10.0.1.2"):EthAddr("00:00:00:00:00:02"),
+                      IPAddr("10.0.1.3"):EthAddr("00:00:00:00:00:03"),
+                      IPAddr("172.64.3.21"):EthAddr("00:00:00:00:00:04"),
+                      IPAddr("172.64.3.22"):EthAddr("00:00:00:00:00:05")
+                      }
 
     log.debug("NAT connection: %s" % (connection))
     # Our table that maps the MAC addresses to the port
@@ -173,7 +184,22 @@ class NAT (object):
     # Multicast messages need to be sent to all ports
     if packet.dst.is_multicast:
       flood()
+    elif packet.dst == ETHER_BROADCAST:
+      log.debug("ERROR: received broadcast, can't handle...")
+      return
     else:
+      if packet.next.dstip.in_network(self.externel_network):
+        log.debug("Got external network packet, setting IP to: %s" % _NAT_IP.toStr())
+        msg = of.ofp_packet_out()
+        msg.in_port = event.port
+        msg.actions.append(of.ofp_action_dl_addr.set_dst(self.arp_table[packet.next.dstip]))
+        msg.actions.append(of.ofp_action_dl_addr.set_src(_NAT_MAC))
+        msg.actions.append(of.ofp_action_nw_addr.set_src(_NAT_IP))
+        msg.actions.append(of.ofp_action_output(port = of.OFPP_FLOOD))
+        msg.data = event.ofp
+        self.connection.send(msg)
+        return
+
       if packet.dst not in self.macToPort:
         flood("Port for %s unknown" % (packet.dst,))
       else:
@@ -204,19 +230,19 @@ class MySwitch (object):
 
   def _handle_ConnectionUp (self, event):
     log.debug("Connection %s" % (event.connection))
-    log.debug("CONN.DPID: %d, %s" % (event.connection.dpid, event.connection.dpid))
-    log.debug("Event DPID: %s" % (dpidToStr(event.dpid)))
+    log.debug("DPID: %d, %s" % (event.connection.dpid, event.connection.dpid))
     """
     We should only get two ConnectionUp:
         . one for the switch that'll act as a simple L2 learning switch
         . one for the switch that'll act as a NAT
     """
     if event.connection.dpid == 1:
-        log.debug("Launching L2learning on dpid: %d" % (event.connection.dpid))
-        L2LearningSwitch(event.connection)
+        log.debug("Launching BRIDGE on dpid: %d" % (event.connection.dpid))
+        Bridge(event.connection)
     else:
+        _NAT_MAC = EthAddr(dpid_to_str(event.connection.dpid))
+        log.debug("Launching NAT on dpid: %d, mac=%s" % (event.connection.dpid, _NAT_MAC.toStr()))
         NAT(event.connection)
-        log.debug("Launching NAT on dpid: %d" % (event.connection.dpid))
 
 """
 launch function is one that POX calls to tell the component to initialize itself
