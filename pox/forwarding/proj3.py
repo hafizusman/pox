@@ -16,6 +16,7 @@ log = core.getLogger()
 # We don't want to flood immediately when a switch connects.
 _flood_delay = 0
 _NAT_IP = IPAddr("172.64.3.1")
+_NAT_PORT_START = 10001
 
 
 class NAT (object):
@@ -32,6 +33,11 @@ class NAT (object):
                       IPAddr("172.64.3.21"):EthAddr("00:00:00:00:00:04"),
                       IPAddr("172.64.3.22"):EthAddr("00:00:00:00:00:05"),
                       }
+
+    self.client_to_nat_port = {}
+    self.nat_port_to_client = {}
+    self.next_free_nat_port = _NAT_PORT_START
+    self.nat_ports_in_use = []
 
     log.debug("NAT connection: %s" % (connection))
     # Our table that maps the MAC addresses to the port
@@ -62,23 +68,61 @@ class NAT (object):
       msg.data = event.ofp
       return msg
 
+  def _translate_To_External_NetworkEx(self, packet, event, port):
+      msg = of.ofp_packet_out()
+      msg.in_port = event.port
+      
+      # todo: send out ARP request to get server IP instead of using our static arp table
+      msg.actions.append(of.ofp_action_dl_addr.set_src(self.external_mac))
+      msg.actions.append(of.ofp_action_dl_addr.set_dst(self.arp_table[packet.next.dstip]))
+      msg.actions.append(of.ofp_action_nw_addr.set_src(self.external_ip))
+      msg.actions.append(of.ofp_action_tp_port.set_src(port))
+      msg.actions.append(of.ofp_action_output(port = of.OFPP_FLOOD))
+      msg.data = event.ofp
+      return msg
+
+  def _translate_From_External_NetworkEx(self, packet, event):
+      msg = of.ofp_packet_out()
+      msg.in_port = event.port
+      msg.actions.append(of.ofp_action_dl_addr.set_dst(self.arp_table[IPAddr("10.0.1.101")]))
+      msg.actions.append(of.ofp_action_dl_addr.set_src(self.external_mac))
+      msg.actions.append(of.ofp_action_nw_addr.set_dst(IPAddr("10.0.1.101")))
+      msg.actions.append(of.ofp_action_output(port = of.OFPP_FLOOD))
+      msg.data = event.ofp
+      return msg
+
+  def _new_nat_port(self):
+    if (self.next_free_nat_port >= 65535):
+      self.next_free_nat_port = _NAT_PORT_START
+    else:
+      self.next_free_nat_port = self.next_free_nat_port + 1
+
+    if (self.next_free_nat_port in self.nat_ports_in_use):
+      log.debug("ERROR: _new_nat_port(): no free ports ")
+      raise RuntimeError("ERROR: _new_nat_port(): no free ports ")
+
+    self.nat_ports_in_use.append(self.next_free_nat_port)
+    log.debug("_new_nat_port(): returning %d " % self.next_free_nat_port)
+    return self.next_free_nat_port
+
+
+
   def _handle_Tcp (self, packet, event):
     ipp = packet.find('ipv4')
     tcpp = packet.find('tcp')
     log.debug("_handle_Tcp(): srcip=%s,dstip=%s,srcport=%d,dstport=%d,flags=%d, %d" % 
       (ipp.srcip, ipp.dstip, tcpp.srcport, tcpp.dstport, tcpp.flags, tcpp.SYN))
 
-    if packet.next.dstip == self.external_ip:
-      log.debug("_handle_Tcp(): TCP packet FROM External Network")
-      msg = self._translate_From_External_Network(packet, event)
+    if (tcpp.SYN):
+      log.debug("_handle_Tcp(): Got SYN")
+      # testing...
+      nat_port = self._new_nat_port()
+      self.client_to_nat_port[(ipp.srcip, tcpp.srcport)] = nat_port
+      self.nat_port_to_client[nat_port] = (ipp.srcip, tcpp.srcport)
+      msg = self._translate_To_External_NetworkEx(packet, event, self.client_to_nat_port[(ipp.srcip, tcpp.srcport)])
       self.connection.send(msg)
-      return
+    return
 
-    if packet.next.dstip.in_network(self.externel_network):
-      log.debug("_handle_Tcp(): TCP packet TO External Network")
-      msg = self._translate_To_External_Network(packet, event)
-      self.connection.send(msg)
-      return
 
   def _handle_Icmp (self, packet, event):
     icmpp = packet.find('icmp')
