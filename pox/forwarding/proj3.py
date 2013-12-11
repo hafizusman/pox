@@ -18,6 +18,11 @@ _flood_delay = 0
 _NAT_IP = IPAddr("172.64.3.1")
 _NAT_PORT_START = 10001
 
+# todo: open these before submitting
+# _TCP_TRANSITORY_IDLE_TIMEOUT = 300
+# _TCP_ESTABLISHED_IDLE_TIMEOUT = 7440
+_TCP_TRANSITORY_IDLE_TIMEOUT = 300
+_TCP_ESTABLISHED_IDLE_TIMEOUT = 5
 
 _TCP_STATE_NONE = 0
 _TCP_STATE_HANDSHAKE = 1
@@ -44,6 +49,7 @@ class NAT (object):
     self.nat_port_to_client = {}
     self.next_free_nat_port = _NAT_PORT_START
     self.nat_ports_in_use = {}
+    self.nat_port_flow_mod_created = 0
 
     log.debug("NAT connection: %s" % (connection))
     # Our table that maps the MAC addresses to the port
@@ -113,8 +119,10 @@ class NAT (object):
 
 
   def _handle_FlowRemoved (self, event):
-    log.debug("_handle_FlowRemoved(): ")
-    raise Exception ("ERROR: TODO")
+    log.debug("_handle_FlowRemoved(): self.nat_port_flow_mod_created=%d"  % self.nat_port_flow_mod_created)
+    if event.idleTimeout == False:
+      raise Exception ("ERROR: rule was removed for some unknown reason!")
+    return
 
 
   def _handle_Tcp (self, packet, event):
@@ -139,14 +147,14 @@ class NAT (object):
 
         nat_port = self.client_to_nat_port[(ipp.srcip, tcpp.srcport)]
         self.nat_ports_in_use[nat_port] = _TCP_STATE_CONNECTED
-
-        self.nat_ports_in_use[nat_port] = _TCP_STATE_CONNECTED
+        self.nat_port_flow_mod_created = nat_port
+        log.debug("_handle_Tcp(): nat_ports_in_use[%d] = %d" % (nat_port, self.nat_ports_in_use[nat_port]))
 
         msg = of.ofp_flow_mod()
         msg.match = of.ofp_match.from_packet(packet, event.port)
         msg.match.in_port = event.port
-        msg.idle_timeout = 10
-        msg.hard_timeout = 30
+        msg.idle_timeout = _TCP_ESTABLISHED_IDLE_TIMEOUT
+        msg.hard_timeout = of.OFP_FLOW_PERMANENT
         msg.flags |= of.OFPFF_SEND_FLOW_REM
         # todo: send out ARP request to get server IP instead of using our static arp table
         msg.actions.append(of.ofp_action_dl_addr.set_src(self.external_mac))
@@ -157,7 +165,6 @@ class NAT (object):
         msg.data = event.ofp
         self.connection.send(msg)
 
-        log.debug("_handle_Tcp(): nat_ports_in_use[%d] = %d" % (nat_port, self.nat_ports_in_use[nat_port]))
 
     elif ipp.srcip.in_network(self.external_network):
       log.debug("_handle_Tcp(): From External netork")
