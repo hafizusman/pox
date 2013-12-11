@@ -112,6 +112,10 @@ class NAT (object):
     return self.next_free_nat_port
 
 
+  def _handle_FlowRemoved (self, event):
+    log.debug("_handle_FlowRemoved(): ")
+    raise Exception ("ERROR: TODO")
+
 
   def _handle_Tcp (self, packet, event):
     ipp = packet.find('ipv4')
@@ -132,10 +136,27 @@ class NAT (object):
         log.debug("_handle_Tcp(): nat_ports_in_use[%d] = %d" % (nat_port, self.nat_ports_in_use[nat_port]))
       if (tcpp.ACK):
         log.debug("_handle_Tcp(): From Internal netork ACK")
+
         nat_port = self.client_to_nat_port[(ipp.srcip, tcpp.srcport)]
         self.nat_ports_in_use[nat_port] = _TCP_STATE_CONNECTED
-        msg = self._translate_To_External_NetworkEx(packet, event, self.client_to_nat_port[(ipp.srcip, tcpp.srcport)])
+
+        self.nat_ports_in_use[nat_port] = _TCP_STATE_CONNECTED
+
+        msg = of.ofp_flow_mod()
+        msg.match = of.ofp_match.from_packet(packet, event.port)
+        msg.match.in_port = event.port
+        msg.idle_timeout = 10
+        msg.hard_timeout = 30
+        msg.flags |= of.OFPFF_SEND_FLOW_REM
+        # todo: send out ARP request to get server IP instead of using our static arp table
+        msg.actions.append(of.ofp_action_dl_addr.set_src(self.external_mac))
+        msg.actions.append(of.ofp_action_dl_addr.set_dst(self.arp_table[packet.next.dstip])) #todo: we need this?
+        msg.actions.append(of.ofp_action_nw_addr.set_src(self.external_ip))
+        msg.actions.append(of.ofp_action_tp_port.set_src(self.client_to_nat_port[(ipp.srcip, tcpp.srcport)]))
+        msg.actions.append(of.ofp_action_output(port = of.OFPP_FLOOD))
+        msg.data = event.ofp
         self.connection.send(msg)
+
         log.debug("_handle_Tcp(): nat_ports_in_use[%d] = %d" % (nat_port, self.nat_ports_in_use[nat_port]))
 
     elif ipp.srcip.in_network(self.external_network):
