@@ -16,7 +16,7 @@ log = core.getLogger()
 # We don't want to flood immediately when a switch connects.
 _flood_delay = 0
 _NAT_IP = IPAddr("172.64.3.1")
-_NAT_PORT_START = 10001
+_NAT_PORT_START = 10000
 
 # todo: open these before submitting
 # _TCP_TRANSITORY_IDLE_TIMEOUT = 300
@@ -117,11 +117,42 @@ class NAT (object):
     log.debug("_new_nat_port(): returning %d " % self.next_free_nat_port)
     return self.next_free_nat_port
 
+  def _add_nat_entry(self, nat_port, ippsrcip, tcppsrcport):
+    log.debug("_add_nat_entry(): Before:")
+    for k,v in self.nat_port_to_client.items():
+      print k,v
+    self.client_to_nat_port[(ippsrcip, tcppsrcport)] = nat_port
+    self.nat_port_to_client[nat_port] = (ippsrcip, tcppsrcport)
+    self.nat_ports_in_use[nat_port] = _TCP_STATE_HANDSHAKE
+    log.debug("_add_nat_entry(): After:")
+    for k,v in self.nat_port_to_client.items():
+      print k,v
+    log.debug("_add_nat_entry(): End:")
+    return
+
+  def _remove_nat_entry(self, port):
+    if self.nat_port_to_client.has_key(port):
+      log.debug("_remove_nat_entry(): Before:")
+      for k,v in self.nat_port_to_client.items():
+        print k,v
+      temp = self.nat_port_to_client[port]
+      del self.client_to_nat_port[(temp[0], temp[1])]
+      del self.nat_port_to_client[port]
+      del self.nat_ports_in_use[port]
+      log.debug("_remove_nat_entry(): After:")
+      for k,v in self.nat_port_to_client.items():
+        print k,v
+      log.debug("_remove_nat_entry(): End:")
+    else:
+      raise Exception("ERROR: _remove_nat_entry(): has no nat port=%d" % port)
+    return
 
   def _handle_FlowRemoved (self, event):
-    log.debug("_handle_FlowRemoved(): self.nat_port_flow_mod_created=%d"  % self.nat_port_flow_mod_created)
+    log.debug("_handle_FlowRemoved(): Called...")
     if event.idleTimeout == False:
       raise Exception ("ERROR: rule was removed for some unknown reason!")
+    log.debug("_handle_FlowRemoved(): cleaning up nat port=%d"  % self.nat_port_flow_mod_created)
+    self._remove_nat_entry(self.nat_port_flow_mod_created)
     return
 
 
@@ -136,9 +167,7 @@ class NAT (object):
       if (tcpp.SYN):
         log.debug("_handle_Tcp(): From Internal netork SYN")
         nat_port = self._new_nat_port()
-        self.client_to_nat_port[(ipp.srcip, tcpp.srcport)] = nat_port
-        self.nat_port_to_client[nat_port] = (ipp.srcip, tcpp.srcport)
-        self.nat_ports_in_use[nat_port] = _TCP_STATE_HANDSHAKE
+        self._add_nat_entry(nat_port, ipp.srcip, tcpp.srcport)
         msg = self._translate_To_External_NetworkEx(packet, event, self.client_to_nat_port[(ipp.srcip, tcpp.srcport)])
         self.connection.send(msg)
         log.debug("_handle_Tcp(): nat_ports_in_use[%d] = %d" % (nat_port, self.nat_ports_in_use[nat_port]))
