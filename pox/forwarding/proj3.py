@@ -53,6 +53,7 @@ class NAT (object):
     self.nat_port_to_client = {}
     self.next_free_nat_port = _NAT_PORT_START
     self.nat_ports_in_use = {}
+    self.nat_ports_in_use_ref_count = {}
 
 
     log.debug("NAT connection: %s" % (connection))
@@ -86,28 +87,15 @@ class NAT (object):
       msg.data = event.ofp
       return msg
 
-  def _translate_To_External_NetworkEx(self, packet, event, port):
-      msg = of.ofp_packet_out()
-      msg.in_port = event.port
-      
-      # todo: send out ARP request to get server IP instead of using our static arp table
-      msg.actions.append(of.ofp_action_dl_addr.set_src(self.external_mac))
-      msg.actions.append(of.ofp_action_dl_addr.set_dst(self.arp_table[packet.next.dstip])) #todo: we need this?
-      msg.actions.append(of.ofp_action_nw_addr.set_src(self.external_ip))
-      msg.actions.append(of.ofp_action_tp_port.set_src(port))
-      msg.actions.append(of.ofp_action_output(port = of.OFPP_FLOOD))
-      msg.data = event.ofp
-      return msg
-
-  # def _translate_From_External_NetworkEx(self, packet, event, port):
-  #     msg = of.ofp_packet_out()
-  #     msg.in_port = event.port
-  #     msg.actions.append(of.ofp_action_dl_addr.set_dst(self.arp_table[IPAddr("10.0.1.101")]))
-  #     msg.actions.append(of.ofp_action_dl_addr.set_src(self.external_mac))
-  #     msg.actions.append(of.ofp_action_nw_addr.set_dst(IPAddr("10.0.1.101")))
-  #     msg.actions.append(of.ofp_action_output(port = of.OFPP_FLOOD))
-  #     msg.data = event.ofp
-  #     return msg
+  def _translate_To_External_NetworkEx(self, msg, packet, event, port):
+    # todo: send out ARP request to get server IP instead of using our static arp table
+    msg.actions.append(of.ofp_action_dl_addr.set_src(self.external_mac))
+    msg.actions.append(of.ofp_action_dl_addr.set_dst(self.arp_table[packet.next.dstip])) #todo: we need this?
+    msg.actions.append(of.ofp_action_nw_addr.set_src(self.external_ip))
+    msg.actions.append(of.ofp_action_tp_port.set_src(port))
+    msg.actions.append(of.ofp_action_output(port = of.OFPP_FLOOD))
+    msg.data = event.ofp
+    return msg
 
   def _new_nat_port(self):
     if (self.next_free_nat_port >= 65535):
@@ -157,8 +145,8 @@ class NAT (object):
     log.debug("_handle_FlowRemoved(): Called...")
     if event.idleTimeout == False:
       raise Exception ("ERROR: rule was removed for some unknown reason!")
+    log.debug("_handle_FlowRemoved(): cleaning up srcip = %s" % (event.ofp.match.nw_src))
     temp = self.client_to_nat_port[(event.ofp.match.nw_src, event.ofp.match.tp_src)]
-    log.debug("_handle_FlowRemoved(): cleaning up nat port=%d"  % temp)
     self._remove_nat_entry(temp)
     return
 
@@ -166,7 +154,7 @@ class NAT (object):
   def _handle_Tcp (self, packet, event):
     ipp = packet.find('ipv4')
     tcpp = packet.find('tcp')
-    log.debug("_handle_Tcp(): srcip=%s,dstip=%s,srcport=%d,dstport=%d,flags=%d, %d" % 
+    log.debug("_handle_Tcp(): srcip=%s,dstip=%s,srcport=%d,dstport=%d,flags=0x%x, %d" % 
       (ipp.srcip, ipp.dstip, tcpp.srcport, tcpp.dstport, tcpp.flags, tcpp.SYN))
 
     if ipp.srcip.in_network(self.internal_network):
@@ -178,37 +166,36 @@ class NAT (object):
           return
         nat_port = self._new_nat_port()
         self._add_nat_entry(nat_port, ipp.srcip, tcpp.srcport)
-        msg = self._translate_To_External_NetworkEx(packet, event, self.client_to_nat_port[(ipp.srcip, tcpp.srcport)])
+        msg = of.ofp_packet_out()
+        msg.in_port = event.port
+        msg = self._translate_To_External_NetworkEx(msg, packet, event, self.client_to_nat_port[(ipp.srcip, tcpp.srcport)])
         self.connection.send(msg)
         log.debug("_handle_Tcp(): nat_ports_in_use[%d] = %d" % (nat_port, self.nat_ports_in_use[nat_port]))
       if (tcpp.ACK):
         log.debug("_handle_Tcp(): From Internal netork ACK")
-
         nat_port = self.client_to_nat_port[(ipp.srcip, tcpp.srcport)]
-        self.nat_ports_in_use[nat_port] = _TCP_STATE_CONNECTED
-        log.debug("_handle_Tcp(): nat_ports_in_use[%d] = %d" % (nat_port, self.nat_ports_in_use[nat_port]))
 
-        msg = of.ofp_flow_mod()
-        msg.match = of.ofp_match.from_packet(packet, event.port)
-        msg.match.in_port = event.port
-        msg.idle_timeout = _TCP_ESTABLISHED_IDLE_TIMEOUT
-        msg.hard_timeout = of.OFP_FLOW_PERMANENT
-        msg.flags |= of.OFPFF_SEND_FLOW_REM
-        # todo: send out ARP request to get server IP instead of using our static arp table
-        msg.actions.append(of.ofp_action_dl_addr.set_src(self.external_mac))
-        msg.actions.append(of.ofp_action_dl_addr.set_dst(self.arp_table[packet.next.dstip])) #todo: we need this?
-        msg.actions.append(of.ofp_action_nw_addr.set_src(self.external_ip))
-        msg.actions.append(of.ofp_action_tp_port.set_src(self.client_to_nat_port[(ipp.srcip, tcpp.srcport)]))
-        msg.actions.append(of.ofp_action_output(port = of.OFPP_FLOOD))
-        msg.data = event.ofp
-        self.connection.send(msg)
+        # if the 3-way handshake has just completed, add a flow mod and transition to established state
+        # the flow mod rule should handle all packets if we're in connected state 
+        if (self.nat_ports_in_use[nat_port] == _TCP_STATE_HANDSHAKE):
+          self.nat_ports_in_use[nat_port] = _TCP_STATE_CONNECTED
+          log.debug("_handle_Tcp(): nat_ports_in_use[%d] = %d" % (nat_port, self.nat_ports_in_use[nat_port]))
 
+          msg = of.ofp_flow_mod()
+          msg.match = of.ofp_match.from_packet(packet, event.port)
+          msg.match.in_port = event.port
+          msg.idle_timeout = _TCP_ESTABLISHED_IDLE_TIMEOUT
+          msg.hard_timeout = of.OFP_FLOW_PERMANENT
+          msg.flags |= of.OFPFF_SEND_FLOW_REM
+          # todo: send out ARP request to get server IP instead of using our static arp table
+          msg = self._translate_To_External_NetworkEx(msg, packet, event, self.client_to_nat_port[(ipp.srcip, tcpp.srcport)])
+          self.connection.send(msg)
 
     elif ipp.srcip.in_network(self.external_network):
       log.debug("_handle_Tcp(): From External netork")
       nat_port = tcpp.dstport
       client_info = self.nat_port_to_client[nat_port]
-      log.debug("_handle_Tcp(): client_info=%s,%d" %(client_info[0], client_info[1]))
+      log.debug("_handle_Tcp(): client_info=%s,%d, state=%d" %(client_info[0], client_info[1], self.nat_ports_in_use[nat_port]))
       msg = of.ofp_packet_out()
       msg.in_port = event.port
       msg.actions.append(of.ofp_action_dl_addr.set_src(self.external_mac)) # todo: needed??
@@ -218,6 +205,7 @@ class NAT (object):
       msg.actions.append(of.ofp_action_output(port = of.OFPP_FLOOD))
       msg.data = event.ofp
       self.connection.send(msg)
+      log.debug(msg)
 
     else:
       log.debug("ERROR: _handle_Tcp(): unhandled tcp packet ")
