@@ -49,7 +49,6 @@ class NAT (object):
     self.nat_port_to_client = {}
     self.next_free_nat_port = _NAT_PORT_START
     self.nat_ports_in_use = {}
-    self.nat_port_flow_mod_created = 0
 
     log.debug("NAT connection: %s" % (connection))
     # Our table that maps the MAC addresses to the port
@@ -149,10 +148,12 @@ class NAT (object):
 
   def _handle_FlowRemoved (self, event):
     log.debug("_handle_FlowRemoved(): Called...")
+    log.debug(event.ofp)
     if event.idleTimeout == False:
       raise Exception ("ERROR: rule was removed for some unknown reason!")
-    log.debug("_handle_FlowRemoved(): cleaning up nat port=%d"  % self.nat_port_flow_mod_created)
-    self._remove_nat_entry(self.nat_port_flow_mod_created)
+    temp = self.client_to_nat_port[(event.ofp.match.nw_src, event.ofp.match.tp_src)]
+    log.debug("_handle_FlowRemoved(): cleaning up nat port=%d"  % temp)
+    self._remove_nat_entry(temp)
     return
 
 
@@ -176,7 +177,6 @@ class NAT (object):
 
         nat_port = self.client_to_nat_port[(ipp.srcip, tcpp.srcport)]
         self.nat_ports_in_use[nat_port] = _TCP_STATE_CONNECTED
-        self.nat_port_flow_mod_created = nat_port
         log.debug("_handle_Tcp(): nat_ports_in_use[%d] = %d" % (nat_port, self.nat_ports_in_use[nat_port]))
 
         msg = of.ofp_flow_mod()
