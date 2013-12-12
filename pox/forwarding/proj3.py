@@ -2,6 +2,9 @@
 Author Muhammad Usman
 
 An NAT + Bridge implementation written directly against the OpenFlow library.
+
+Usage example:
+  python pox.py log.level --DEBUG forwarding.proj3 --blockedservers="172.64.3.21,172.64.3.22"
 """
 
 from pox.core import core
@@ -31,10 +34,11 @@ _TCP_STATE_CONNECTED = 2
 
 class NAT (object):
 
-  def __init__ (self, connection, mac, ip):
+  def __init__ (self, connection, mac, ip, blockedservers):
     self.connection = connection
     self.external_mac = mac
     self.external_ip = ip
+    self.blockedservers = blockedservers
     self.external_network = '172.64.3.0/24'
     self.internal_network = '10.0.1.0/24'
     self.arp_table =  {
@@ -50,7 +54,10 @@ class NAT (object):
     self.next_free_nat_port = _NAT_PORT_START
     self.nat_ports_in_use = {}
 
+
     log.debug("NAT connection: %s" % (connection))
+    log.debug("NAT blockedservers: ")
+    log.debug(self.blockedservers)
     # Our table that maps the MAC addresses to the port
     self.macToPort = {}
 
@@ -148,7 +155,6 @@ class NAT (object):
 
   def _handle_FlowRemoved (self, event):
     log.debug("_handle_FlowRemoved(): Called...")
-    log.debug(event.ofp)
     if event.idleTimeout == False:
       raise Exception ("ERROR: rule was removed for some unknown reason!")
     temp = self.client_to_nat_port[(event.ofp.match.nw_src, event.ofp.match.tp_src)]
@@ -167,6 +173,9 @@ class NAT (object):
       log.debug("_handle_Tcp(): From Internal netork")
       if (tcpp.SYN):
         log.debug("_handle_Tcp(): From Internal netork SYN")
+        if (ipp.dstip in self.blockedservers):
+          log.debug("_handle_Tcp(): WARN: ipp.dstip=%s is blocked!! Ignoring request" % ipp.dstip)
+          return
         nat_port = self._new_nat_port()
         self._add_nat_entry(nat_port, ipp.srcip, tcpp.srcport)
         msg = self._translate_To_External_NetworkEx(packet, event, self.client_to_nat_port[(ipp.srcip, tcpp.srcport)])
@@ -327,30 +336,6 @@ class NAT (object):
         self.connection.send(msg)
 
 
-class MySwitch (object):
-  """
-  Waits for OpenFlow switches to connect and makes them learning switches.
-  """
-  def __init__ (self):
-    core.openflow.addListeners(self)
-
-  def _handle_ConnectionUp (self, event):
-    log.debug("Connection %s" % (event.connection))
-    log.debug("DPID: %d, %s" % (event.connection.dpid, event.connection.dpid))
-    """
-    We should only get two ConnectionUp:
-        . one for the switch that'll act as a simple L2 learning switch
-        . one for the switch that'll act as a NAT
-    """
-    if event.connection.dpid == 1:
-        log.debug("Launching BRIDGE on dpid: %d" % (event.connection.dpid))
-        Bridge(event.connection)
-    else:
-        _NAT_MAC = EthAddr(dpid_to_str(event.connection.dpid))
-        log.debug("Launching NAT on dpid: %d, mac=%s" % (event.connection.dpid, _NAT_MAC.toStr()))
-        NAT(event.connection, _NAT_MAC, _NAT_IP)
-
-
 class Bridge (object):
 
   def __init__ (self, connection):
@@ -441,12 +426,43 @@ class Bridge (object):
         self.connection.send(msg)
 
 
+
+class MySwitch (object):
+  """
+  Launches the appropriate instance of the switch based on DPID: NAT or BRIDGE
+  """
+  def __init__ (self, blockedservers):
+    self.blockedservers = [IPAddr(a) for a in blockedservers]
+
+    core.openflow.addListeners(self)
+
+  def _handle_ConnectionUp (self, event):
+    log.debug("Connection %s" % (event.connection))
+    log.debug("DPID: %d, %s" % (event.connection.dpid, event.connection.dpid))
+    """
+    We should only get two ConnectionUp:
+        . one for the switch that'll act as a simple L2 learning switch
+        . one for the switch that'll act as a NAT
+    """
+    if event.connection.dpid == 1:
+        log.debug("Launching BRIDGE on dpid: %d" % (event.connection.dpid))
+        Bridge(event.connection)
+    else:
+        _NAT_MAC = EthAddr(dpid_to_str(event.connection.dpid))
+        log.debug("Launching NAT on dpid: %d, mac=%s" % (event.connection.dpid, _NAT_MAC.toStr()))
+        NAT(event.connection, _NAT_MAC, _NAT_IP, self.blockedservers)
+
+
+
+
 """
 launch function is one that POX calls to tell the component to initialize itself
 We don't use any command line parameters for now
 """
-def launch ():
+def launch (blockedservers):
   """
   Register our L2 learning switch
   """
-  core.registerNew(MySwitch)
+  blockedservers = blockedservers.replace(","," ").split()
+  blockedservers = [IPAddr(x) for x in blockedservers]
+  core.registerNew(MySwitch, blockedservers)
