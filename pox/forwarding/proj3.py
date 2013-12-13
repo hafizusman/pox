@@ -53,7 +53,7 @@ class NAT (object):
     self.next_free_nat_port = _NAT_PORT_START
     self.nat_ports_in_use = {}
     self.nat_ports_in_use_ref_count = {}
-
+    self.nat_lock = threading.Lock()
 
     log.debug("NAT connection: %s" % (connection))
     log.debug("<NAT_blockedservers>")
@@ -110,12 +110,14 @@ class NAT (object):
     log.debug("Allocated new NAT port = %d " % self.next_free_nat_port)
     return self.next_free_nat_port
 
+  # must be called with self._nat_lock held
   def _add_nat_entry(self, nat_port, ippsrcip, tcppsrcport):
     self.client_to_nat_port[(ippsrcip, tcppsrcport)] = nat_port
     self.nat_port_to_client[nat_port] = (ippsrcip, tcppsrcport)
     self.nat_ports_in_use[nat_port] = _TCP_STATE_HANDSHAKE
     return
 
+  # must be called with self._nat_lock held
   def _remove_nat_entry(self, port):
     if self.nat_port_to_client.has_key(port):
       temp = self.nat_port_to_client[port]
@@ -133,14 +135,16 @@ class NAT (object):
     # we'll actively cleanup our resources if the client-side rule has been removed
     # server side rule doesn't have any associated resources for cleanup
     if (event.ofp.match.nw_src == event.ofp.match.nw_src.in_network(self.internal_network)):
-      temp = self.client_to_nat_port[(event.ofp.match.nw_src, event.ofp.match.tp_src)]
-      self._remove_nat_entry(temp)
+      with self.nat_lock:
+        temp = self.client_to_nat_port[(event.ofp.match.nw_src, event.ofp.match.tp_src)]
+        self._remove_nat_entry(temp)
     return
 
   def _transitory_Timer(self, nat_port):
-    if (self.nat_ports_in_use[nat_port] == _TCP_STATE_HANDSHAKE):
-      log.debug ("TimerExpired!!! port[%d]=%d" % (nat_port, self.nat_ports_in_use[nat_port]))
-      self._remove_nat_entry(nat_port)
+    with self.nat_lock:
+      if (self.nat_ports_in_use[nat_port] == _TCP_STATE_HANDSHAKE):
+        log.debug ("TimerExpired!!! port[%d]=%d" % (nat_port, self.nat_ports_in_use[nat_port]))
+        self._remove_nat_entry(nat_port)
 
   def _handle_Tcp (self, packet, event):
     ipp = packet.find('ipv4')
@@ -150,8 +154,9 @@ class NAT (object):
       if (tcpp.SYN):
         if (ipp.dstip in self.blockedservers):
           return
-        nat_port = self._new_nat_port()
-        self._add_nat_entry(nat_port, ipp.srcip, tcpp.srcport)
+        with self.nat_lock:
+          nat_port = self._new_nat_port()
+          self._add_nat_entry(nat_port, ipp.srcip, tcpp.srcport)
         msg = of.ofp_packet_out()
         msg.in_port = event.port
         msg = self._append_Actions_Tx_External(msg, packet, event, self.client_to_nat_port[(ipp.srcip, tcpp.srcport)])
