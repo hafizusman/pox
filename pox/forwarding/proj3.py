@@ -13,6 +13,8 @@ from pox.lib.addresses import IPAddr, EthAddr
 from pox.lib.packet.ethernet import ethernet, ETHER_BROADCAST
 from pox.lib.util import *
 import time
+import threading
+
 
 log = core.getLogger()
 
@@ -60,6 +62,7 @@ class NAT (object):
 
     # Add listner for packetIn messages
     connection.addListeners(self)
+
 
   def _translate_To_External_Network(self, packet, event):
       msg = of.ofp_packet_out()
@@ -134,6 +137,10 @@ class NAT (object):
       self._remove_nat_entry(temp)
     return
 
+  def _transitory_Timer(self, nat_port):
+    if (self.nat_ports_in_use[nat_port] == _TCP_STATE_HANDSHAKE):
+      log.debug ("TimerExpired!!! port[%d]=%d" % (nat_port, self.nat_ports_in_use[nat_port]))
+      self._remove_nat_entry(nat_port)
 
   def _handle_Tcp (self, packet, event):
     ipp = packet.find('ipv4')
@@ -149,6 +156,11 @@ class NAT (object):
         msg.in_port = event.port
         msg = self._append_Actions_Tx_External(msg, packet, event, self.client_to_nat_port[(ipp.srcip, tcpp.srcport)])
         self.connection.send(msg)
+
+        # start transitory timer
+        t = threading.Timer(_TCP_TRANSITORY_IDLE_TIMEOUT, self._transitory_Timer, [nat_port])
+        t.start()
+
       if (tcpp.ACK):
         nat_port = self.client_to_nat_port[(ipp.srcip, tcpp.srcport)]
 
